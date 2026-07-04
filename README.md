@@ -220,7 +220,7 @@ com.bineesh.mooncartsettlement
 ├── reconciliation/   # Run lifecycle, report building
 ├── api/              # Discrepancy investigation endpoints
 ├── config/           # MatchingProperties, OpenAPI, exception handler
-└── testdata/         # Test CSV generator (seeded Random(42))
+└── testdata/         # Test CSV generator (output written to Dev/)
 ```
 
 ### 3.2 Data Model
@@ -293,6 +293,7 @@ settlement:
 | CSV parsing | Apache Commons CSV |
 | Testing | JUnit 5, H2 (in-memory, PostgreSQL mode) |
 | Build | Gradle 9.5 |
+| Containerization | Docker, Docker Compose |
 
 **Database:** `jdbc:postgresql://localhost:5462/mooncartsettlement`  
 **Credentials:** `postgres` / `postgres`
@@ -372,7 +373,7 @@ All ingest endpoints require `runId` as a query parameter and accept a **CSV fil
 
 ```bash
 curl -s -X POST "http://localhost:8080/api/v1/ingest/yuno?runId=${RUN_ID}" \
-  -F "file=@build/testdata/yuno_transactions.csv"
+  -F "file=@Dev/yuno_transactions.csv"
 ```
 
 **CSV status values:** `AUTHORIZED`, `CAPTURED`, `REFUNDED`
@@ -383,7 +384,7 @@ curl -s -X POST "http://localhost:8080/api/v1/ingest/yuno?runId=${RUN_ID}" \
 
 ```bash
 curl -s -X POST "http://localhost:8080/api/v1/ingest/bank-settlements?runId=${RUN_ID}" \
-  -F "file=@build/testdata/bank_settlements.csv"
+  -F "file=@Dev/bank_settlements.csv"
 ```
 
 The `yuno_transaction_id` column is optional — leave blank to test fuzzy matching.
@@ -394,7 +395,7 @@ The `yuno_transaction_id` column is optional — leave blank to test fuzzy match
 
 ```bash
 curl -s -X POST "http://localhost:8080/api/v1/ingest/orders?runId=${RUN_ID}" \
-  -F "file=@build/testdata/internal_orders.csv"
+  -F "file=@Dev/internal_orders.csv"
 ```
 
 **CSV payment status values:** `PAID`, `PENDING`, `REFUNDED`
@@ -522,7 +523,69 @@ Ranked by age, amount, and merchant impact.
 
 ## 6. How to Run the Project
 
-### Prerequisites
+### Option A — Docker Compose (recommended)
+
+Runs PostgreSQL and the application together with no local Java/PostgreSQL setup required.
+
+**Prerequisites:** Docker and Docker Compose
+
+```bash
+# Build and start PostgreSQL + app
+docker compose up --build -d
+
+# Check logs
+docker compose logs -f app
+```
+
+| Service | URL / Port |
+|---------|------------|
+| API | http://localhost:8080 |
+| Swagger UI | http://localhost:8080/swagger-ui.html |
+| PostgreSQL | Internal to Docker network only (app connects via `postgres:5432`) |
+
+To expose PostgreSQL on the host (optional, e.g. for debugging), add under the `postgres` service in `docker-compose.yml`:
+
+```yaml
+ports:
+  - "5463:5432"
+```
+
+> **Note:** Port `5462` may already be used if you run PostgreSQL locally.
+
+Sample CSV test files live in `Dev/` and are copied into the Docker image at `/app/Dev`.
+
+**Run the full end-to-end test flow:**
+
+```bash
+./docker/scripts/test-flow.sh
+```
+
+This script creates a run, ingests all three CSV files, executes matching, and prints sample discrepancy results.
+
+**Stop services:**
+
+```bash
+docker compose down
+```
+
+**Port already in use?** If local services occupy 8080 or PostgreSQL ports:
+
+```bash
+APP_PORT=8081 docker compose up --build -d
+BASE_URL=http://localhost:8081 ./docker/scripts/test-flow.sh
+```
+
+**Reset database (delete persisted data):**
+
+```bash
+docker compose down -v
+```
+
+---
+
+### Option B — Local development
+
+#### Prerequisites
 
 - **Java 25**
 - **PostgreSQL** running on `localhost:5462`
@@ -552,7 +615,7 @@ curl -s http://localhost:8080/swagger-ui.html -o /dev/null -w "%{http_code}\n"
 
 ### Generate test data (optional)
 
-Produces 1050+ rows of CSV test data in `build/testdata/`:
+Produces 1050+ rows of CSV test data in `Dev/`:
 
 ```bash
 SPRING_APPLICATION_JSON='{"settlement":{"generate-test-data":true}}' ./gradlew bootRun
@@ -562,9 +625,9 @@ Generated files:
 
 | File | Rows | Description |
 |------|------|-------------|
-| `yuno_transactions.csv` | 1050 | Yuno payment logs |
-| `bank_settlements.csv` | ~1005 | Bank settlement records |
-| `internal_orders.csv` | 1050 | MoonCart orders |
+| `Dev/yuno_transactions.csv` | 1050 | Yuno payment logs |
+| `Dev/bank_settlements.csv` | ~1005 | Bank settlement records |
+| `Dev/internal_orders.csv` | 1050 | MoonCart orders |
 
 Data spans 30 days (2026-03-01 to 2026-03-30), three currencies (IDR ~40%, PHP ~35%, USD ~25%), with ~15% injected problem cases.
 
@@ -572,15 +635,36 @@ Data spans 30 days (2026-03-01 to 2026-03-30), three currencies (IDR ~40%, PHP ~
 
 ## 7. How to Test the Whole Flow
 
-### Step 1 — Start the app and generate test data
+### Quick test with Docker
 
 ```bash
-./gradlew bootRun
-# In another terminal:
-SPRING_APPLICATION_JSON='{"settlement":{"generate-test-data":true}}' ./gradlew bootRun
+docker compose up --build -d
+./docker/scripts/test-flow.sh
 ```
 
-### Step 2 — Create a reconciliation run
+---
+
+### Manual step-by-step (Docker or local)
+
+#### Step 1 — Start the app
+
+**Docker:**
+```bash
+docker compose up --build -d
+```
+
+**Local:**
+```bash
+./gradlew bootRun
+# Optional: generate test data
+SETTLEMENT_TEST_DATA_DIR=Dev \
+  SPRING_APPLICATION_JSON='{"settlement":{"generate-test-data":true}}' \
+  ./gradlew bootRun
+```
+
+Use `Dev/` for all test flows (default path in `test-flow.sh` and the test data generator).
+
+#### Step 2 — Create a reconciliation run
 
 ```bash
 RUN_ID=$(curl -s -X POST http://localhost:8080/api/v1/reconciliation/runs \
@@ -591,36 +675,39 @@ RUN_ID=$(curl -s -X POST http://localhost:8080/api/v1/reconciliation/runs \
 echo "RUN_ID=${RUN_ID}"
 ```
 
-### Step 3 — Ingest all three sources
+#### Step 3 — Ingest all three sources
 
 ```bash
+# Docker test data path
+DATA_DIR=Dev
+
 curl -s -X POST "http://localhost:8080/api/v1/ingest/yuno?runId=${RUN_ID}" \
-  -F "file=@build/testdata/yuno_transactions.csv" | python3 -m json.tool
+  -F "file=@${DATA_DIR}/yuno_transactions.csv" | python3 -m json.tool
 
 curl -s -X POST "http://localhost:8080/api/v1/ingest/bank-settlements?runId=${RUN_ID}" \
-  -F "file=@build/testdata/bank_settlements.csv" | python3 -m json.tool
+  -F "file=@${DATA_DIR}/bank_settlements.csv" | python3 -m json.tool
 
 curl -s -X POST "http://localhost:8080/api/v1/ingest/orders?runId=${RUN_ID}" \
-  -F "file=@build/testdata/internal_orders.csv" | python3 -m json.tool
+  -F "file=@${DATA_DIR}/internal_orders.csv" | python3 -m json.tool
 ```
 
 Each response should show `"accepted"` ≥ 1000 (bank slightly fewer due to edge cases).
 
-### Step 4 — Execute matching
+#### Step 4 — Execute matching
 
 ```bash
 curl -s -X POST "http://localhost:8080/api/v1/reconciliation/runs/${RUN_ID}/execute" \
   | python3 -m json.tool
 ```
 
-### Step 5 — Verify report matches execute output
+#### Step 5 — Verify report matches execute output
 
 ```bash
 curl -s "http://localhost:8080/api/v1/reconciliation/runs/${RUN_ID}/report" \
   | python3 -m json.tool
 ```
 
-### Step 6 — Investigate discrepancies
+#### Step 6 — Investigate discrepancies
 
 ```bash
 # Unmatched Yuno (missing settlements)
@@ -640,7 +727,7 @@ curl -s "http://localhost:8080/api/v1/statistics/summary?runId=${RUN_ID}" \
   | python3 -m json.tool
 ```
 
-### Step 7 — Run automated tests
+#### Step 7 — Run automated tests
 
 ```bash
 ./gradlew test

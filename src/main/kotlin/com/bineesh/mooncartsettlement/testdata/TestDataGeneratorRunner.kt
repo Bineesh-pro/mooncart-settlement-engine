@@ -11,7 +11,9 @@ class TestDataGeneratorRunner(
     private val testDataGenerator: TestDataGenerator,
 ) : CommandLineRunner {
     override fun run(vararg args: String) {
-        val outputDir = File("build/testdata")
+        val outputDir = System.getenv("SETTLEMENT_TEST_DATA_DIR")
+            ?.let { File(it) }
+            ?: File("Dev")
         val files = testDataGenerator.generate(outputDir)
         println("Generated test data in ${outputDir.absolutePath}")
         println("Yuno: ${files.yunoFile.name} (${files.transactionCount} rows)")
