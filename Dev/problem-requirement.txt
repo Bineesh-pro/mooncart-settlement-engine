@@ -1,0 +1,71 @@
+Settlement Matching Engine—a backend service that can:
+
+Ingest data from multiple sources (Yuno transaction logs, bank settlement files, internal orders)
+Match transactions across these sources intelligently, even when identifiers don't align perfectly
+Identify discrepancies (missing transactions, amount mismatches, timing issues)
+Provide an API that MoonCart's finance team can query to investigate specific issues
+The challenge is that matching isn't straightforward:
+- A single transaction might appear with different IDs in each system
+- Settlement amounts often differ from transaction amounts (due to fees, refunds, FX conversion)
+- Timing mismatches occur due to settlement delays and timezone differences
+- Partial settlements happen when disputes or holds delay full funding
+
+Functional Requirements
+Core Requirement 1: Data Ingestion & Matching Logic
+Build a service that can:
+
+Accept transaction data from three sources (format of your choice—could be file uploads, API calls, etc.)
+Implement intelligent matching logic that links records across sources based on multiple potential identifiers: transaction amount, timestamp (with tolerance), customer email/ID, order reference, bank reference number
+Handle fuzzy matching for amounts (accounting for fees, FX differences, rounding)
+Handle timing tolerance (settlements can occur 1-5 days after transaction date)
+Produce a reconciliation report that shows:
+Successfully matched transactions (present in all three sources)
+Unmatched Yuno transactions (payment processed but no settlement received)
+Unmatched settlements (bank received money but no corresponding Yuno transaction)
+Amount discrepancies (matched by ID but amounts don't align)
+Acceptance Criteria:
+
+The service can process a full month's data (1000+ transactions) and produce a complete reconciliation report
+Matching logic correctly handles realistic edge cases: multi-day settlement delays, small fee discrepancies, timezone differences
+Clear distinction between different types of discrepancies
+Core Requirement 2: Discrepancy Investigation API
+Build a REST or GraphQL API that allows MoonCart's finance team to:
+
+Query discrepancies by type (unmatched transactions, amount mismatches, etc.)
+Filter by date range, currency, amount threshold, or merchant
+Retrieve detailed information about a specific transaction across all three data sources
+Get aggregate statistics: total unmatched amount, number of discrepancies by category, trend over time
+Acceptance Criteria:
+
+API has clear, documented endpoints (README or built-in documentation)
+Responses include enough detail for a human to investigate the issue
+Performance is reasonable for realistic data volumes (1000+ records)
+Stretch Goals (Partial completion expected and welcomed)
+Stretch Goal A: Confidence Scoring
+Assign a confidence score (0-100%) to each match based on how many identifiers aligned, how close the amounts are, and timing proximity. This helps finance teams prioritize which "matched" transactions to audit.
+
+Stretch Goal B: Automatic Refund/Chargeback Detection
+When a settlement amount is significantly less than the transaction amount, automatically flag if this is likely due to a refund or chargeback by analyzing patterns in the data (e.g., negative settlement entries, reversal timestamps).
+
+Stretch Goal C: Missing Funds Prioritization
+Provide an endpoint that prioritizes the investigation queue—rank unmatched transactions by factors like age (older = higher priority), amount (larger = higher priority), and merchant impact (merchants with many discrepancies = higher priority).
+
+Test Data
+Your solution must work with realistic test data. Generate or create a dataset containing:
+
+At least 1,000 transactions spanning 30 days
+Three currencies: IDR (Indonesian Rupiah), PHP (Philippine Peso), USD
+Three data sources for each transaction:
+Yuno transaction logs: Include transaction ID, timestamp, amount, currency, status (authorized, captured, refunded), merchant ID, customer email, order reference
+Bank settlement files: Include settlement date, bank reference number, settled amount (after fees), currency, sometimes missing the Yuno transaction ID (forcing matching by other fields)
+MoonCart internal orders: Include order ID, customer email, order amount, timestamp, payment status
+Include realistic edge cases:
+
+10-15% of transactions should be "problem cases":
+Yuno transaction exists but no corresponding settlement (potential missing funds)
+Settlement exists with no Yuno transaction (potential duplicate funding or error)
+Matched records but amounts differ by 2-5% (fees or FX discrepancy)
+Transactions with 3-5 day settlement delays
+A handful of refunds and chargebacks
+5-10 transactions should represent the most severe issues (large amounts, very old, completely unmatched)
+You may generate this data using AI tools, scripts, or any method you prefer. Document your data generation approach briefly.
